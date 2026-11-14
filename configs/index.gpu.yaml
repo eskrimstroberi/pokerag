@@ -1,0 +1,32 @@
+﻿# Index GPU â€” bge-m3 (1024 dim) via sentence-transformers di CUDA.
+#
+# Ini jalur utama untuk laptop ini: embedding dijalankan sekali, vektornya
+# di-cache, lalu VRAM dilepas untuk generator. Index ini terpisah dari index
+# Gemini (768 dim) dan bge-small (384 dim) karena index_version mencakup
+# identitas embedder.
+
+snapshot: pokerag-corpus-v1
+strategy: heading
+artifacts_root: artifacts
+
+embedder:
+  provider: st
+  model: BAAI/bge-m3
+  dimension: 1024
+  device: cuda
+  dtype: float16
+  max_seq_length: 512
+  batch_size: 16
+  query_prefix: ""
+  items_per_minute: 0
+  max_retries: 1
+  timeout_seconds: 120
+
+qdrant:
+  mode: local
+  distance: cosine
+  on_disk: true
+
+bm25:
+  k1: 1.2
+  b: 0.75

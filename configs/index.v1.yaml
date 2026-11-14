@@ -1,0 +1,29 @@
+# Index v1 — Gemini embeddings + Qdrant + BM25
+#
+# Embedder is fixed for every configuration (B2-B6 and A2), because changing it
+# mid-experiment would confound retrieval ablations. Vectors are normalised and
+# stored with cosine distance; BM25 stays local so B3 fuses two real rankings.
+
+snapshot: pokerag-corpus-v1
+strategy: heading
+artifacts_root: artifacts
+
+embedder:
+  provider: gemini
+  model: gemini-embedding-001
+  dimension: 768
+  task_document: RETRIEVAL_DOCUMENT
+  task_query: RETRIEVAL_QUERY
+  batch_size: 100
+  items_per_minute: 90        # free tier: 100 item/menit; sisakan margin
+  max_retries: 5
+  timeout_seconds: 120
+
+qdrant:
+  mode: local
+  distance: cosine
+  on_disk: true
+
+bm25:
+  k1: 1.2
+  b: 0.75
