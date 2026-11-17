@@ -131,6 +131,26 @@ def heading_chunks(
     return chunks
 
 
+def _section_blocks(sections: list[dict[str, Any]], text_length: int) -> list[tuple[str, int, int]]:
+    """Contiguous h2 blocks that cover the whole document.
+
+    ``top_level_blocks`` gives the h2 groups but leaves whitespace gaps between
+    them and can start after character 0. Parents must not cross an h2 boundary,
+    and coverage must stay 100%, so each block is extended to the start of the
+    next one (and the last one to the end of the text).
+    """
+    ordered = sorted(sections, key=lambda section: int(section["char_start"]))
+    blocks = top_level_blocks(ordered)
+    if not blocks:
+        return [("", 0, text_length)]
+    spans: list[tuple[str, int, int]] = []
+    for index, (key, _start, end) in enumerate(blocks):
+        start = spans[-1][2] if spans else 0
+        stop = blocks[index + 1][1] if index + 1 < len(blocks) else text_length
+        spans.append((key, start, max(stop, end)))
+    return spans
+
+
 def hierarchical_chunks(
     *,
     doc_id: str,
@@ -140,26 +160,33 @@ def hierarchical_chunks(
     cfg: ChunkingConfig,
     counter: TokenCounter,
 ) -> list[Chunk]:
-    """Parent sections plus child windows, so retrieval can expand to context."""
-    blocks = top_level_blocks(sections)
+    """Parent sections plus child windows, so retrieval can expand to context.
+
+    Parents are built **inside** h2 blocks: a parent (and therefore any child)
+    never crosses a top-level heading. Building parents as sliding windows over
+    the whole document (the previous behaviour) silently turned this strategy
+    into "fixed with parents": 2.117 of 23.399 children crossed an h2 boundary,
+    which is what the A1 audit caught.
+    """
     parents: list[Chunk] = []
-    for start, end in windows(0, len(text), cfg.hierarchical.parent_chars, cfg.hierarchical.parent_overlap_chars):
-        if end - start < cfg.hierarchical.min_chars and parents:
-            continue
-        parents.append(
-            _emit(
-                doc_id=doc_id,
-                revid=revid,
-                text=text,
-                strategy="hierarchical",
-                start=start,
-                end=end,
-                order=len(parents),
-                counter=counter,
-                heading_path=_heading_at(sections, start),
-                role="parent",
+    for _key, block_start, block_end in _section_blocks(sections, len(text)):
+        for start, end in windows(
+            block_start, block_end, cfg.hierarchical.parent_chars, cfg.hierarchical.parent_overlap_chars
+        ):
+            parents.append(
+                _emit(
+                    doc_id=doc_id,
+                    revid=revid,
+                    text=text,
+                    strategy="hierarchical",
+                    start=start,
+                    end=end,
+                    order=len(parents),
+                    counter=counter,
+                    heading_path=_heading_at(sections, start),
+                    role="parent",
+                )
             )
-        )
 
     children: list[Chunk] = []
     for parent in parents:

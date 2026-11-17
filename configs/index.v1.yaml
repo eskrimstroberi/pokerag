@@ -1,11 +1,12 @@
-# Index v1 — Gemini embeddings + Qdrant + BM25
+# Index v1 — Gemini embeddings + Qdrant + BM25 (arsip; kuota free tier habis).
 #
-# Embedder is fixed for every configuration (B2-B6 and A2), because changing it
-# mid-experiment would confound retrieval ablations. Vectors are normalised and
-# stored with cosine distance; BM25 stays local so B3 fuses two real rankings.
+# Embedder dipin untuk SETIAP konfigurasi (B2–B6 dan A2), karena mengganti model
+# di tengah eksperimen mencampur efek retrieval dengan efek embedding. Vektor
+# dinormalisasi dan disimpan dengan cosine; BM25 tetap lokal sehingga B3
+# menggabungkan dua ranking yang benar-benar berbeda.
 
 snapshot: pokerag-corpus-v1
-strategy: heading
+strategies: [heading]
 artifacts_root: artifacts
 
 embedder:
@@ -21,6 +22,7 @@ embedder:
 
 qdrant:
   mode: local
+  path: indexes/qdrant
   distance: cosine
   on_disk: true
 

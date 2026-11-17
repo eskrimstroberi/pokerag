@@ -13,7 +13,7 @@ claims to cover, because that would silently break citations and qrels.
 from __future__ import annotations
 
 import json
-import statistics
+import time
 from pathlib import Path
 
 import pandas as pd
@@ -164,7 +164,12 @@ def build(cfg: ChunkingConfig, only: str = "all") -> dict:
         entry["file_sha256"] = sha256_bytes(output.read_bytes())
         entry["file_bytes"] = output.stat().st_size
         entry["estimated_vectors_mb"] = round(
-            sum(1 for chunk in chunks if chunk.role != "parent") * 1024 * 4 / 1024 / 1024, 1
+            sum(1 for chunk in chunks if chunk.role != "parent")
+            * cfg.embedding_dimension
+            * 4
+            / 1024
+            / 1024,
+            1,
         )
         stats[strategy] = entry
         logger.info("%s: %s chunks (%s)", strategy, len(chunks), output.name)

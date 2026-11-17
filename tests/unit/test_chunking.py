@@ -70,7 +70,7 @@ def test_heading_respects_blocks_and_minimum_size():
         lower, upper = blocks[tuple(chunk.heading_path)]
         assert lower <= chunk.char_start and chunk.char_end <= upper, "chunk crossed an h2 boundary"
         assert chunk.n_chars >= cfg.heading.min_chars or chunk.char_end - chunk.char_start == upper - lower
-    assert max(chunk.n_chars for chunk in chunks) <= cfg.heading.max_chars or True
+    assert all(chunk.n_chars <= cfg.heading.max_chars for chunk in chunks)
     assert sum(1 for chunk in chunks if chunk.heading_path == ["Game data"]) > 1
 
 
@@ -85,6 +85,31 @@ def test_hierarchical_children_point_to_real_parents():
     for child in children:
         assert child.parent_id in parents
         assert child.char_start >= 0 and child.char_end <= len(text)
+
+
+def test_hierarchical_never_crosses_an_h2_boundary():
+    text, sections = make_doc()
+    chunks = hierarchical_chunks(
+        doc_id="d1", revid=1, text=text, sections=sections, cfg=config(), counter=TokenCounter()
+    )
+    h2_starts = [section["char_start"] for section in sections if section["level"] == 2]
+    for chunk in chunks:
+        crossed = [start for start in h2_starts if chunk.char_start < start < chunk.char_end]
+        assert not crossed, f"{chunk.chunk_id} ({chunk.role}) melewati heading di {crossed}"
+
+
+def test_hierarchical_parents_cover_the_whole_document():
+    text, sections = make_doc()
+    chunks = hierarchical_chunks(
+        doc_id="d1", revid=1, text=text, sections=sections, cfg=config(), counter=TokenCounter()
+    )
+    parents = sorted(
+        (chunk for chunk in chunks if chunk.role == "parent"), key=lambda chunk: chunk.char_start
+    )
+    assert parents[0].char_start == 0
+    assert parents[-1].char_end == len(text)
+    for previous, current in zip(parents, parents[1:]):
+        assert current.char_start == previous.char_end, "parents must stay contiguous"
 
 
 def test_ids_are_deterministic():

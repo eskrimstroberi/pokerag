@@ -42,6 +42,9 @@ class Embedder(Protocol):
     def identity(self) -> dict:
         """Provider, model, dimension and task types (for the manifest)."""
 
+    def describe(self) -> dict:
+        """Measured facts about the loaded model (params, dtype, device...)."""
+
     def embed_documents(self, texts: Sequence[str]) -> list[list[float]]:
         """Embed chunk texts for indexing."""
 
@@ -75,6 +78,21 @@ class GeminiEmbedder:
             "dimension": self._cfg.dimension,
             "task_document": self._cfg.task_document,
             "task_query": self._cfg.task_query,
+        }
+
+    def describe(self) -> dict:
+        """Hosted model: only what the provider documents can be recorded."""
+        import curl_cffi
+
+        return {
+            "provider": self._cfg.provider,
+            "device": "google-api",
+            "dimension": self._cfg.dimension,
+            "task_document": self._cfg.task_document,
+            "task_query": self._cfg.task_query,
+            "max_seq_length": None,
+            "batching": {"batch_size": self._cfg.batch_size, "items_per_minute": self._cfg.items_per_minute},
+            "client": f"curl_cffi {getattr(curl_cffi, '__version__', 'unknown')}",
         }
 
     def count_tokens(self, text: str) -> int:
@@ -189,7 +207,9 @@ class TorchEmbedder:
                 "pip install --index-url https://download.pytorch.org/whl/cu124 torch"
             )
         self._torch = torch
-        self._model = SentenceTransformer(cfg.model, device=cfg.device)
+        # The revision is pinned in the config so a re-download cannot swap the
+        # weights behind the same model name.
+        self._model = SentenceTransformer(cfg.model, device=cfg.device, revision=cfg.revision)
         self._model.max_seq_length = cfg.max_seq_length
         if cfg.dtype == "float16":
             self._model.half()
@@ -206,6 +226,79 @@ class TorchEmbedder:
             "device": self._cfg.device,
             "dtype": self._cfg.dtype,
             "max_seq_length": self._cfg.max_seq_length,
+        }
+
+    def _pooling(self) -> str:
+        """Pooling mode reported by sentence-transformers (CLS for bge-m3)."""
+        legacy = {
+            "pooling_mode_cls_token": "cls",
+            "pooling_mode_mean_tokens": "mean",
+            "pooling_mode_max_tokens": "max",
+            "pooling_mode_mean_sqrt_len_tokens": "mean_sqrt_len",
+        }
+        for module in self._model:
+            if module.__class__.__name__ != "Pooling":
+                continue
+            mode = getattr(module, "pooling_mode", None)
+            if isinstance(mode, str):
+                return mode
+            active = [name for attr, name in legacy.items() if getattr(module, attr, False)]
+            if active:
+                return "+".join(active)
+        return "unknown"
+
+    def _weights_dtype(self) -> str:
+        try:
+            return str(next(self._model.parameters()).dtype).replace("torch.", "")
+        except StopIteration:  # pragma: no cover - a model without parameters
+            return "unknown"
+
+    def describe(self) -> dict:
+        """Everything a reviewer needs to identify the vectors' provenance."""
+        import sentence_transformers
+
+        torch = self._torch
+        params = int(sum(p.numel() for p in self._model.parameters()))
+        max_positions = None
+        architecture = None
+        try:
+            config = self._model[0].auto_model.config
+            max_positions = int(config.max_position_embeddings)
+            architectures = getattr(config, "architectures", None) or []
+            architecture = architectures[0] if architectures else config.model_type
+        except Exception:  # pragma: no cover - architecture without that field
+            pass
+        gpu = None
+        if self._cfg.device == "cuda" and torch.cuda.is_available():
+            props = torch.cuda.get_device_properties(0)
+            gpu = {
+                "name": props.name,
+                "total_memory_gib": round(props.total_memory / 2**30, 1),
+            }
+        get_dimension = getattr(self._model, "get_embedding_dimension", None)
+        dimension = (
+            int(get_dimension())
+            if callable(get_dimension)
+            else int(self._model.get_sentence_embedding_dimension())
+        )
+        return {
+            "provider": self._cfg.provider,
+            "device": self._cfg.device,
+            "gpu": gpu,
+            "architecture": architecture,
+            "dimension": dimension,
+            "parameters": params,
+            "dtype_inference": self._weights_dtype(),
+            "max_seq_length": self._cfg.max_seq_length,
+            "model_max_seq_length": max_positions,
+            "pooling": self._pooling(),
+            "normalize": True,
+            "tokenizer": getattr(self._model.tokenizer, "name_or_path", self._cfg.model),
+            "library": {
+                "sentence_transformers": sentence_transformers.__version__,
+                "torch": torch.__version__,
+                "cuda": torch.version.cuda,
+            },
         }
 
     def count_tokens(self, text: str) -> int:
@@ -252,6 +345,19 @@ class LocalEmbedder:
             "dimension": self._cfg.dimension,
             "task_document": "none",
             "task_query": "none",
+        }
+
+    def describe(self) -> dict:
+        """ONNX runtime: the exported graph is the artefact that matters."""
+        import fastembed
+
+        return {
+            "provider": self._cfg.provider,
+            "device": "cpu",
+            "dimension": self._cfg.dimension,
+            "dtype_inference": "onnx",
+            "max_seq_length": self._cfg.max_seq_length,
+            "library": {"fastembed": getattr(fastembed, "__version__", "unknown")},
         }
 
     def count_tokens(self, text: str) -> int:

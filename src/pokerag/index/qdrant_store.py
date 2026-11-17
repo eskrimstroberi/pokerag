@@ -63,3 +63,8 @@ def upsert_points(
 def collection_count(client: QdrantClient, name: str) -> int:
     """Number of stored points."""
     return client.count(collection_name=name, exact=True).count
+
+
+def list_collections(client: QdrantClient) -> list[str]:
+    """Names of every collection in this database."""
+    return sorted(collection.name for collection in client.get_collections().collections)

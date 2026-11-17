@@ -43,7 +43,7 @@ cleaning:
     - "style"
     - "script"
     - ".navbox"
-    - ".infobox"
+    - ".infobox"          # wrapper tabel; isi infobox tetap disimpan sebagai baris teks
     - ".noprint"
     - ".mw-empty-elt"
     - ".hatnote"

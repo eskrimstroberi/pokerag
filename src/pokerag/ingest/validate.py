@@ -6,7 +6,6 @@ project documentation instead of a claim that "the corpus is fine".
 
 from __future__ import annotations
 
-import json
 import statistics
 from pathlib import Path
 

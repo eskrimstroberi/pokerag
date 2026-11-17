@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import Iterable
 
 from bs4 import BeautifulSoup
 from bs4.element import Tag
@@ -28,6 +27,9 @@ from pokerag.ingest.models import CleanDoc, LicenseInfo, Section
 
 logger = get_logger("pokerag.ingest.clean")
 
+# Bump this whenever the cleaning rules change. ``run_clean`` skips a document
+# whose stored version and config hash still match, so an edited cleaner with an
+# unchanged version would silently keep stale documents.
 CLEANER_VERSION = "1"
 
 REDIRECT_RE = re.compile(r"^\s*#(?:redirect|REDIRECT)\s*\[\[([^\]\|#]+)", re.IGNORECASE)

@@ -1,22 +1,30 @@
-﻿# Index GPU â€” bge-m3 (1024 dim) via sentence-transformers di CUDA.
+﻿# Index GPU — bge-m3 (1024 dim) via sentence-transformers di CUDA.
 #
-# Ini jalur utama untuk laptop ini: embedding dijalankan sekali, vektornya
-# di-cache, lalu VRAM dilepas untuk generator. Index ini terpisah dari index
-# Gemini (768 dim) dan bge-small (384 dim) karena index_version mencakup
-# identitas embedder.
+# Ini jalur utama untuk laptop ini: satu proses memuat model sekali, lalu
+# membangun tiga koleksi (fixed, heading, hierarchical) dalam satu database
+# Qdrant. Vektornya di-cache, sehingga setelah build selesai VRAM dilepas untuk
+# generator.
+#
+# max_seq_length 1024 dipilih dari pengukuran, bukan tebakan: dengan tokenizer
+# bge-m3, chunk `fixed` 2048 karakter mencapai 1.005 token. Pada 512 token,
+# 95% chunk fixed terpotong sebelum di-embed dan ablasi A1 jadi tidak adil.
+#
+# revision dipin (commit sha) supaya unduhan ulang tidak bisa menukar bobot di
+# balik nama model.
 
 snapshot: pokerag-corpus-v1
-strategy: heading
+strategies: [fixed, heading, hierarchical]
 artifacts_root: artifacts
 
 embedder:
   provider: st
   model: BAAI/bge-m3
+  revision: 5617a9f61b028005a4858fdac845db406aefb181
   dimension: 1024
   device: cuda
   dtype: float16
-  max_seq_length: 512
-  batch_size: 16
+  max_seq_length: 1024
+  batch_size: 8
   query_prefix: ""
   items_per_minute: 0
   max_retries: 1
@@ -24,6 +32,7 @@ embedder:
 
 qdrant:
   mode: local
+  path: indexes/qdrant
   distance: cosine
   on_disk: true
 
