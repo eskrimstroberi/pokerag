@@ -29,10 +29,10 @@ menyebut perubahan chunking. Di sisi lain, data korpus sangat tidak rata:
 
 | | fixed | heading | hierarchical |
 |---|---|---|---|
-| chunk | 9.887 | 23.767 | 35.178 (23.484 child) |
-| token untuk embedding | 4,99 jt | 4,84 jt | 4,67 jt (child saja) |
-| ukuran vektor 1024-dim | 38,6 MB | 92,8 MB | 91,4 MB |
-| cakupan teks | 100% | 99,8% | 100% |
+| chunk | 9.887 | 23.767 | 37.854 (24.444 child) |
+| token untuk embedding | 6,03 jt | 5,86 jt | 5,66 jt (child saja) |
+| ukuran vektor 1024-dim | 38,6 MB | 92,8 MB | ~95 MB |
+| cakupan teks | 100% | 99,8% | 99,9% |
 
 Jumlah chunk `heading` 2,4× lebih besar, tetapi token untuk embedding hampir
 sama — biaya embedding ditentukan token, bukan jumlah chunk. Yang membesar
@@ -41,3 +41,24 @@ adalah ukuran index dan jumlah kandidat rerank.
 Semua chunk menyimpan `char_start`/`char_end` sehingga bisa dipetakan kembali ke
 dokumen dan dipakai untuk qrels berbasis span. Invariant `chunk.text ==
 doc.text[start:end]` diuji; build gagal bila dilanggar.
+
+## Adendum (2026-11-17): parent `hierarchical` sekarang per blok h2
+
+Audit chunking (`pokerag-chunk report`, `docs/experiments/A1-chunking.md`)
+menemukan bahwa implementasi `hierarchical` **melanggar batas h2**: 2.117 dari
+23.399 child menyeberang heading, 58% dimulai di tengah kata, dan hanya 1,5%
+dimulai tepat di heading — praktis identik dengan `fixed`. Penyebabnya,
+`top_level_blocks(sections)` dihitung tetapi tidak dipakai; parent dibangun
+sebagai jendela 1.500 karakter dari awal sampai akhir dokumen.
+
+Perbaikan: parent dibangun **di dalam** blok h2 yang dipaksa menutup seluruh teks
+(tiap blok diperpanjang sampai awal blok berikutnya), lalu child tetap jendela
+1.000 karakter di dalam parent. Hasil terukur: 0 pelanggaran batas h2, mulai di
+heading 1,5% → 13%, section utuh 44,8% → 50,3%, cakupan 100% → 99,9% karena
+1.296 child di bawah 80 karakter (stub tautan pada blok sangat pendek) dibuang
+sesuai `min_chars_keep`, sama seperti `heading` membuang 512 stub.
+
+Konsekuensi: chunk `hierarchical` berubah, sehingga vektor dan `index_version`
+koleksi itu harus dibangun ulang; `fixed` dan `heading` tidak tersentuh. Angka
+token/vektor di tabel atas sudah memperhitungkan versi baru.
+

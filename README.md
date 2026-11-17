@@ -2,7 +2,7 @@
 
 **Evidence-Grounded Pokémon Knowledge Assistant Using Hybrid and Adaptive Retrieval**
 
-Status: **tahap 1 — ingestion & preprocessing** (belum ada retrieval, LLM, atau evaluasi).
+Status: **tahap 2 — chunking & index** (retrieval end-to-end, LLM, dan evaluasi belum ada).
 
 ## Apa yang sudah ada
 
@@ -36,9 +36,9 @@ pokerag-ingest validate
 pokerag-ingest freeze
 ```
 
-Tes: `pytest` (16 tes, termasuk invariant offset, uji politeness tanpa jaringan,
-dan uji idempotensi: fetch kedua = 0 request, clean kedua = 0 tulisan, freeze
-dua kali = hash identik).
+Tes: `pytest` (40 tes, termasuk invariant offset, uji politeness tanpa jaringan,
+uji idempotensi fetch/clean/freeze, dan uji index: tiga koleksi dalam satu
+database, cache terikat identitas embedder, serta gate pemotongan chunk).
 
 ## Idempotensi
 
@@ -65,43 +65,60 @@ disimpan terpisah di `provenance.json` agar tidak menggeser hash.
 
 ```bash
 pokerag-chunk build                 # fixed, heading, hierarchical
-pokerag-index build                 # Gemini embeddings + Qdrant + BM25
-pokerag-index search "which ability does Charizard have"
+pokerag-index identity              # tabel identitas embedder (dipakai build juga)
+pokerag-index build                 # 3 koleksi Qdrant dalam satu database
+pokerag-index search "which ability does Charizard have" --strategy heading
 ```
 
 | Artefak | Isi |
 |---|---|
 | `chunks/<strategi>.parquet` | unit retrieval dengan `char_start`/`char_end` |
-| `chunks_report.md` | tabel A1: jumlah chunk, p95, over-budget, cakupan |
-| `artifacts/indexes/<index_version>/` | Qdrant lokal, BM25, manifest, laporan |
-| `artifacts/embeddings/*.parquet` | cache vektor (kunci: chunk_id + hash teks) |
+| `chunks_report.md` | jumlah chunk, p95, over-budget, cakupan |
+| `docs/experiments/A1-index.md` | tabel A1 (di-commit): ukuran index, token, context length |
+| `docs/models/embedding-BAAI-bge-m3.md` | identitas embedder (di-commit) |
+| `artifacts/indexes/qdrant/` | satu database: `chunks_fixed`, `chunks_heading`, `chunks_hierarchical` |
+| `artifacts/indexes/bm25/<strategi>/` | BM25 per koleksi, untuk B3 |
+| `artifacts/indexes/<strategi>/manifest.json` | `index_version`, jumlah titik, checksum vektor |
+| `artifacts/indexes/provenance.json` | waktu build, jumlah embed baru (tidak ikut hash) |
+| `artifacts/embeddings/*.parquet` | cache vektor per identitas embedder |
 
-Embedder dipin: `gemini-embedding-001`, 768 dim, `RETRIEVAL_DOCUMENT` untuk
-dokumen dan `RETRIEVAL_QUERY` untuk query. Build ulang tidak memanggil API
-(0 request) selama teks chunk tidak berubah.
+Embedder dipin: `BAAI/bge-m3` revisi `5617a9f6…`, 1024 dim, fp16 di CUDA,
+`max_seq_length: 1024`. Tiga strategi memakai fungsi embedding yang sama, jadi
+perbandingan A1 hanya mengubah unit retrieval.
 
-### Jalur GPU (dipakai di mesin ini)
+Batas 1024 token bukan tebakan: dengan tokenizer bge-m3, chunk `fixed` 2048
+karakter adalah 597 token (p50) dan 1.005 (max). Pada 512 token, 95% chunk fixed
+dipotong sebelum di-embed. Karena itu build **gagal sebelum embedding** bila ada
+chunk melewati jendela (`--allow-truncation` untuk kasus yang sengaja).
 
-```bash
-.venv\Scripts\python -m pip install --index-url https://download.pytorch.org/whl/cu124 torch
-.venv\Scripts\python -m pip install sentence-transformers
-pokerag-index --config configs/index.gpu.yaml build
-```
+Cache diikat ke identitas embedding (model, revisi, dimensi, dtype,
+`max_seq_length`), sehingga build ulang dengan input sama = 0 embedding, dan
+mengubah salah satu parameter tidak pernah memakai vektor lama. Terukur di
+RTX 3050 4 GB: 15–32 chunk/detik, seluruh korpus (58.098 unit) sekitar 41 menit
+(667 + 902 + 894 detik), puncak VRAM 1,43 GiB. Setelah build selesai proses
+keluar dan VRAM kosong.
 
-`configs/index.gpu.yaml` memakai `BAAI/bge-m3` fp16 di CUDA (1024 dim). Terukur
-pada RTX 3050 4 GB: **1.000 chunk ≈ 65 detik** (≈15 chunk/detik), jadi seluruh
-korpus ≈25 menit, sekali saja. Setelah build selesai proses keluar dan VRAM
-kembali kosong, sehingga generator 1.5B dapat memakai GPU yang sama tanpa
-unload manual.
+`index_version` mencakup snapshot, chunk, strategi, identitas embedder, metrik
+jarak dan parameter BM25; waktu build dan jumlah embed baru disimpan terpisah
+di `provenance.json` supaya manifest tetap deterministik.
 
-Tiga varian index hidup berdampingan dan tidak bisa tertukar, karena
-`index_version` mencakup identitas embedder:
+### Varian index
 
-| Config | Embedder | Dim | Catatan |
-|---|---|---|---|
-| `index.gpu.yaml` | `bge-m3` (CUDA, fp16) | 1024 | jalur utama, kualitas terbaik |
-| `index.local.yaml` | `bge-small` (ONNX, CPU) | 384 | fallback tanpa GPU |
-| `index.v1.yaml` | Gemini API | 768 | diblokir kuota free tier |
+| Config | Embedder | Dim | Koleksi | Catatan |
+|---|---|---|---|---|
+| `index.gpu.yaml` | `bge-m3` (CUDA, fp16, 1024 token) | 1024 | 3 | jalur utama, default CLI |
+| `index.local.yaml` | `bge-small` (ONNX, CPU) | 384 | heading | fallback tanpa GPU |
+| `index.v1.yaml` | Gemini API | 768 | heading | arsip; kuota free tier habis |
+
+Ketiganya berbagi database yang sama tetapi nama koleksinya tetap per strategi;
+mengganti embedder pada koleksi yang sudah ada **ditolak** tanpa `--force`.
+
+### Backup
+
+`python scripts/upload_hf.py --version v2` mengunggah keadaan penuh (satu
+`indexes.tar.gz` berisi tiga koleksi, manifest, identitas embedder, laporan A1)
+ke dataset privat `meivawijaya/pokerag-corpus-v2`. Repo v1 tetap utuh sebagai
+arsip keadaan sebelumnya.
 
 ## Etika dan lisensi data
 
@@ -119,11 +136,17 @@ Rincian: `docs/legal/data-license.md`.
 
 ```
 configs/corpus.v1.yaml     seleksi, transport, lisensi, cleaning, dedup, gate
+configs/chunking.v1.yaml   tiga strategi, tokenizer model, budget token
+configs/index.*.yaml       embedder, database, BM25
 src/pokerag/core/          hashing, JSONL, logging
 src/pokerag/ingest/        select, fetch, clean, dedup, validate, freeze, cli
-tests/unit/                invariant offset, dedup, politeness, seleksi, lisensi
+src/pokerag/chunking/      fixed, heading, hierarchical, tokenizer, cli
+src/pokerag/index/         build, embedding cache, Qdrant, BM25, identitas, cli
+tests/unit/                offset, dedup, politeness, seleksi, lisensi, index
 artifacts/corpus/<name>/   artefak (diabaikan git), hanya manifest yang di-commit
 docs/adr/                  keputusan teknis
+docs/experiments/          tabel A1 (di-commit, hasil build)
+docs/models/               identitas embedder (di-commit, hasil build)
 ```
 
 ## Keputusan yang masih terbuka
